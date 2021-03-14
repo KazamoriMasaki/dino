@@ -11,7 +11,8 @@ public class FileProvider : Dino.FileProvider, Object {
     private StreamInteractor stream_interactor;
     private Dino.Database dino_db;
     private static Regex http_url_regex = /^https?:\/\/([^\s#]*)$/; // Spaces are invalid in URLs and we can't use fragments for downloads
-    private static Regex omemo_url_regex = /^aesgcm:\/\/(.*)#(([A-Fa-f0-9]{2}){48}|([A-Fa-f0-9]{2}){44})$/;
+    private static Regex embedded_http_url_regex = /https?:\/\/([^\s#]*)/;
+	private static Regex omemo_url_regex = /^aesgcm:\/\/(.*)#(([A-Fa-f0-9]{2}){48}|([A-Fa-f0-9]{2}){44})$/;
 
     public FileProvider(StreamInteractor stream_interactor, Dino.Database dino_db) {
         this.stream_interactor = stream_interactor;
@@ -36,11 +37,42 @@ public class FileProvider : Dino.FileProvider, Object {
 
         public override async bool run(Entities.Message message, Xmpp.MessageStanza stanza, Conversation conversation) {
             string? oob_url = Xmpp.Xep.OutOfBandData.get_url_from_message(stanza);
+
             bool normal_file = oob_url != null && oob_url == message.body && FileProvider.http_url_regex.match(message.body);
+
             bool omemo_file = FileProvider.omemo_url_regex.match(message.body);
+
+			MatchInfo match_info;
+
             if (normal_file || omemo_file) {
                 yield outer.on_file_message(message, conversation);
-            }
+            } else if(FileProvider.embedded_http_url_regex.match(message.body, 0, out match_info)) {
+				int start, end;
+				match_info.fetch_pos(0, out start, out end);
+
+				string? message_body = message.body;
+
+				Entities.Message new_message = new Message(message.body[start:end]);
+				new_message.account = message.account;
+				new_message.counterpart = message.counterpart;
+				new_message.ourpart = message.ourpart;
+				new_message.id = -1;
+				new_message.stanza_id = message.stanza_id;
+
+				new_message.marked = message.marked;
+				new_message.encryption = message.encryption;
+
+				new_message.time = message.time;
+				new_message.local_time = message.local_time;
+				new_message.direction = message.direction;
+
+				new_message.type_ = message.type_;
+				stream_interactor.get_module(MessageStorage.IDENTITY).add_message(new_message, conversation);
+				stream_interactor.get_module(ContentItemStore.IDENTITY).insert_message(message, conversation);
+
+                yield outer.on_file_message(new_message, conversation);
+			}
+
             return false;
         }
     }
